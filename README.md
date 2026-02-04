@@ -13,7 +13,7 @@ For EC2 or any server: configure `.env` and optionally `config/pipeline.json`, t
    cp .env.example .env
    ```
    Edit `.env` and set:
-   - **OpenSearch:** `OPENSEARCH_URL`, `OPENSEARCH_INDEX`, `OPENSEARCH_REGION`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`
+   - **OpenSearch:** `OPENSEARCH_HOST` (hostname only), `OPENSEARCH_INDEX`, `OPENSEARCH_REGION`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`
    - **Input:** `INPUT_FILE` — path to a single dump file or a directory of `.json.gz` / `.json.bz2` files (e.g. `data/streams` after downloading — see below)
    - **Azure embeddings:** `AZURE_EMBEDDING_ENDPOINT`, `AZURE_EMBEDDING_API_KEY`
    - Optional: `MAX_PAGES`, `PROGRESS_FILE`
@@ -50,7 +50,7 @@ For EC2 or any server: configure `.env` and optionally `config/pipeline.json`, t
 
 | File | Purpose |
 |------|--------|
-| `.env` | Secrets and paths: OpenSearch URL, AWS keys, Azure keys, `INPUT_FILE`, `PROGRESS_FILE`, optional overrides |
+| `.env` | Secrets and paths: OpenSearch host (`OPENSEARCH_HOST`), AWS keys, Azure keys, `INPUT_FILE`, `PROGRESS_FILE`, optional overrides |
 | `config/index_schema.json` | Index settings and mappings (shards, replicas, nested `chunks` with k-NN vector) |
 | `config/pipeline.json` | Chunking and pipeline tuning: `chunk_size`, `batch_size`, `skip_sections`, embedding/bulk workers, etc. |
 

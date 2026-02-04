@@ -19,7 +19,7 @@ OPENSEARCH_URL = (os.environ.get("OPENSEARCH_URL") or "").strip()
 if not OPENSEARCH_URL and os.environ.get("OPENSEARCH_HOST"):
     OPENSEARCH_URL = "https://" + os.environ.get("OPENSEARCH_HOST", "").strip()
 if not OPENSEARCH_URL or not OPENSEARCH_URL.startswith("http"):
-    print("Set OPENSEARCH_URL or OPENSEARCH_HOST in .env")
+    print("Set OPENSEARCH_HOST (or OPENSEARCH_URL) in .env")
     sys.exit(1)
 
 INDEX_NAME = os.environ.get("OPENSEARCH_INDEX", "wiki_kb_nested")
