@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
 Create OpenSearch index with nested k-NN schema.
-Reads config/index_schema.json and .env (OPENSEARCH_*, AWS_*).
+Reads config/index_schema.json and .env (OPENSEARCH_*, AWS_*, EMBEDDING_*).
+Dimension is set from EMBEDDING_DIMENSION env var (default 1536 for Azure, 768 for Gemma).
 """
 import os
 import sys
@@ -24,6 +25,11 @@ if not OPENSEARCH_URL or not OPENSEARCH_URL.startswith("http"):
 
 INDEX_NAME = os.environ.get("OPENSEARCH_INDEX", "wiki_kb_nested")
 OPENSEARCH_REGION = os.environ.get("OPENSEARCH_REGION", "ap-south-1")
+
+# Embedding dimension: default based on provider
+EMBEDDING_PROVIDER = os.environ.get("EMBEDDING_PROVIDER", "azure").lower()
+DEFAULT_DIMS = {"azure": 1536, "gemma": 768}
+EMBEDDING_DIMENSION = int(os.environ.get("EMBEDDING_DIMENSION", DEFAULT_DIMS.get(EMBEDDING_PROVIDER, 1536)))
 
 
 def _request(method: str, url: str, data: dict = None):
@@ -75,7 +81,13 @@ def main():
     with open(schema_path, "r", encoding="utf-8") as f:
         schema = json.load(f)
 
-    print("OpenSearch index (nested schema)")
+    # Override dimension from env (EMBEDDING_DIMENSION or default based on provider)
+    try:
+        schema["mappings"]["properties"]["chunks"]["properties"]["vector"]["dimension"] = EMBEDDING_DIMENSION
+    except KeyError:
+        pass
+
+    print(f"OpenSearch index (nested schema, {EMBEDDING_DIMENSION}-dim vectors)")
     result = _request("GET", OPENSEARCH_URL)
     if not result or "version" not in result:
         print("Cannot reach OpenSearch:", result)
@@ -92,7 +104,7 @@ def main():
     if result and result.get("acknowledged"):
         print(f"Index '{INDEX_NAME}' created.")
         settings = schema.get("settings", {}).get("index", {})
-        print(f"  Shards: {settings.get('number_of_shards', '?')}, Replicas: {settings.get('number_of_replicas', '?')}")
+        print(f"  Shards: {settings.get('number_of_shards', '?')}, Replicas: {settings.get('number_of_replicas', '?')}, Vector dim: {EMBEDDING_DIMENSION}")
     else:
         print("ERROR creating index:", result)
         sys.exit(1)

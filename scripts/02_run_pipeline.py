@@ -68,16 +68,28 @@ def load_config() -> dict:
         config["opensearch_url"] = "https://" + os.environ.get("OPENSEARCH_HOST", "").strip()
     config["opensearch_index"] = os.environ.get("OPENSEARCH_INDEX", config.get("opensearch_index", "wiki_kb_nested"))
     config["opensearch_region"] = os.environ.get("OPENSEARCH_REGION", "ap-south-1")
+    # Embedding provider and dimension
+    config["embedding_provider"] = os.environ.get("EMBEDDING_PROVIDER", config.get("embedding_provider", "azure")).lower()
+    provider = config["embedding_provider"]
+    default_dims = {"azure": 1536, "gemma": 768}
+    config["embedding_dimension"] = env_int("EMBEDDING_DIMENSION") or config.get("embedding_dimension") or default_dims.get(provider, 1536)
+
+    # Azure config
     config["azure_endpoint"] = os.environ.get("AZURE_EMBEDDING_ENDPOINT", config.get("azure_endpoint", ""))
     config["azure_api_key"] = os.environ.get("AZURE_EMBEDDING_API_KEY", config.get("azure_api_key", ""))
     config["azure_api_version"] = os.environ.get("AZURE_EMBEDDING_API_VERSION", config.get("azure_api_version", "2024-02-01"))
+
+    # Gemma config (local inference)
+    config["gemma_model"] = os.environ.get("GEMMA_MODEL", config.get("gemma_model", "google/embeddinggemma-300m"))
+    config["gemma_device"] = os.environ.get("GEMMA_DEVICE", config.get("gemma_device", "cpu"))
+    config["gemma_max_chars"] = env_int("GEMMA_MAX_CHARS") or config.get("gemma_max_chars", 2000)
+
     index_name = config.get("opensearch_index", "wiki_kb_nested")
     raw_progress = os.environ.get("PROGRESS_FILE") or config.get("progress_file")
     if not raw_progress:
         # Default: output/<INDEX>_pipeline_progress.json (no _nested suffix)
         raw_progress = f"output/{index_name}_pipeline_progress.json"
     config["progress_file"] = str(REPO_ROOT / raw_progress) if not os.path.isabs(raw_progress) else raw_progress
-    config["embedding_provider"] = os.environ.get("EMBEDDING_PROVIDER", config.get("embedding_provider", "azure"))
 
     return config
 
@@ -100,6 +112,7 @@ def main():
     print("Nested pipeline: one doc per article, chunks[] with vectors")
     print(f"  Input: {input_file}")
     print(f"  Index: {config['opensearch_index']}")
+    print(f"  Embedding: {config['embedding_provider']} ({config['embedding_dimension']}-dim)")
     print(f"  Max pages: {max_pages or 'all'}")
 
     run_pipeline_nested(

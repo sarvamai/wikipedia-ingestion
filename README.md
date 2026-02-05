@@ -15,7 +15,10 @@ For EC2 or any server: configure `.env` and optionally `config/pipeline.json`, t
    Edit `.env` and set:
    - **OpenSearch:** `OPENSEARCH_HOST` (hostname only), `OPENSEARCH_INDEX`, `OPENSEARCH_REGION`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`
    - **Input:** `INPUT_FILE` — path to a single dump file or a directory of `.json.gz` / `.json.bz2` files (e.g. `data/streams` after downloading — see below)
+   - **Embedding provider:** `EMBEDDING_PROVIDER=azure` or `EMBEDDING_PROVIDER=gemma`
+   - **Embedding dimension:** `EMBEDDING_DIMENSION` (1536 for Azure, 768/512/256/128 for Gemma MRL)
    - **Azure embeddings:** `AZURE_EMBEDDING_ENDPOINT`, `AZURE_EMBEDDING_API_KEY`
+   - **Gemma embeddings:** `GEMMA_MODEL`, `GEMMA_DEVICE` (local inference via sentence-transformers)
    - Optional: `MAX_PAGES`, `PROGRESS_FILE`
 
 3. **Optional: edit `config/pipeline.json`** for chunk size, batch size, skip sections, bulk/embedding workers, etc. Values in `.env` override the config file where applicable.
@@ -30,7 +33,11 @@ For EC2 or any server: configure `.env` and optionally `config/pipeline.json`, t
    ```bash
    uv sync
    ```
-   Or with pip: `pip install -r requirements.txt`
+   For **local Gemma inference** (no endpoint), install with the optional extra:
+   ```bash
+   uv sync --extra gemma
+   ```
+   Or with pip: `pip install -r requirements.txt` (add `sentence-transformers>=2.2.0` for local Gemma).
 
 ## Usage
 
@@ -45,6 +52,19 @@ For EC2 or any server: configure `.env` and optionally `config/pipeline.json`, t
    ```
    Without uv, use `python scripts/01_create_index.py` and `python scripts/02_run_pipeline.py` after installing deps.
    Progress is saved to `output/<OPENSEARCH_INDEX>_pipeline_progress.json` unless you set `PROGRESS_FILE` in .env. Re-run to resume from the last batch.
+
+3. **Fast mode with Gemma** (optimized for EC2 in same VPC as OpenSearch):
+   ```bash
+   # Basic (uses .env defaults)
+   uv run python scripts/03_fast_with_gemma.py
+
+   # High parallelism with GPU
+   uv run python scripts/03_fast_with_gemma.py --workers 16 --embed-workers 8 --auto-gpu
+
+   # Custom batch sizes
+   uv run python scripts/03_fast_with_gemma.py --batch 500 --embed-batch 128 --bulk-workers 8
+   ```
+   This script uses Gemma embeddings by default with aggressive parallelization settings (2x workers, no delay). See `--help` for all options.
 
 ## Config files
 
@@ -69,12 +89,13 @@ wikipedia-ingestion/
 ├── src/
 │   ├── dump_reader.py    # Stream pages from CirrusSearch dumps
 │   ├── chunking.py      # Sections (source_text == Heading ==) + chunks
-│   ├── embedding.py     # Azure embeddings (parallel, truncation)
+│   ├── embedding.py     # Embeddings: Azure or Gemma (parallel, truncation)
 │   ├── opensearch_client.py
 │   └── pipeline_nested.py
 ├── scripts/
 │   ├── 01_create_index.py
-│   └── 02_run_pipeline.py
+│   ├── 02_run_pipeline.py
+│   └── 03_fast_with_gemma.py  # Fast mode: Gemma + high parallelism for EC2
 ├── data/
 │   ├── download_streams.sh   # Download dump into data/streams/
 │   └── streams/              # .json.bz2 / .json.gz (set INPUT_FILE to this dir)
@@ -87,5 +108,9 @@ wikipedia-ingestion/
 
 - **Resume:** Progress is saved to `output/{OPENSEARCH_INDEX}_pipeline_progress.json` (one file per index). It stores the last stream file and position, so on restart the pipeline continues from that file instead of re-reading from the beginning. Delete the progress file to start from scratch.
 - **Full dump:** Leave `MAX_PAGES` unset to process the entire dump. Expect long runtimes (days) depending on size and API limits.
-- **Embedding limit:** Chunk text is truncated to stay under the Azure token limit (8192); long sections are split by `chunk_size`/overlap in `config/pipeline.json`.
+- **Embedding models:**
+  - **Azure** (default): 1536-dim, 8192 token limit. Set `EMBEDDING_PROVIDER=azure`.
+  - **Gemma**: 768-dim (or 512/256/128 via MRL truncation), ~2048 token limit. Set `EMBEDDING_PROVIDER=gemma`. Requires `uv sync --extra gemma` for sentence-transformers.
+  - When switching models, recreate the index (`01_create_index.py`) with matching `EMBEDDING_DIMENSION`.
+- **Chunk size:** For Gemma's shorter context, reduce `chunk_size` in `config/pipeline.json` (e.g. 200–300 tokens instead of 1000).
 - **Chunking test:** Run `uv run python scripts/test_chunking.py` to verify section parsing, chunk splitting, and nested doc output.
