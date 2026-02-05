@@ -1,8 +1,8 @@
 {
-  "chunk_size": 1000,
-  "chunk_overlap": 50,
+  "chunk_size": 2000,
+  "chunk_overlap": 200,
   "min_chunk_length": 20,
-  "max_chunk_tokens": 6000,
+  "max_chunk_tokens": 512,
   "include_auxiliary": true,
   "skip_sections": [
     "see also",
@@ -23,5 +23,9 @@
   "bulk_request_timeout": 60,
   "bulk_max_retries": 5,
   "bulk_parallel_workers": 4,
-  "max_doc_id_bytes": 512
+  "max_doc_id_bytes": 512,
+
+  "embedding_dimension": 768,
+  "max_embedded_chunks": 3,
+  "embedding_model": "msmarco-distilbert-base-tas-b"
 }

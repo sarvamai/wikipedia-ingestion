@@ -83,11 +83,16 @@ def main():
 
     # Override dimension from env (EMBEDDING_DIMENSION or default based on provider)
     try:
+        # Update chunk-level vector dimension
         schema["mappings"]["properties"]["chunks"]["properties"]["vector"]["dimension"] = EMBEDDING_DIMENSION
+        # Update doc-level vector dimension
+        schema["mappings"]["properties"]["doc_vector"]["dimension"] = EMBEDDING_DIMENSION
     except KeyError:
         pass
 
     print(f"OpenSearch index (nested schema, {EMBEDDING_DIMENSION}-dim vectors)")
+    print(f"  - doc_vector: article-level embedding (mean of first N chunks)")
+    print(f"  - chunks[].vector: chunk-level embeddings (first N chunks only)")
     result = _request("GET", OPENSEARCH_URL)
     if not result or "version" not in result:
         print("Cannot reach OpenSearch:", result)

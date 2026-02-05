@@ -104,13 +104,34 @@ wikipedia-ingestion/
 └── README.md
 ```
 
+## Embedding Strategy
+
+The pipeline uses a **two-level embedding** approach for efficient hybrid search:
+
+1. **Document-level vector (`doc_vector`)**: Mean of first N chunk vectors (default N=3)
+2. **Chunk-level vectors (`chunks[].vector`)**: Only first N chunks have vectors
+
+This design allows:
+- **Fast article retrieval**: k-NN on `doc_vector` finds relevant articles
+- **Precise passage retrieval**: k-NN on `chunks[].vector` finds exact passages
+- **Hybrid search**: BM25 on all chunk content + vector search on first 3 chunks
+
+### Configuration
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `MAX_EMBEDDED_CHUNKS` | 3 | Chunks to embed per article |
+| `chunk_size` | 2000 | ~512 tokens per chunk |
+| `EMBEDDING_DIMENSION` | 768 | msmarco-distilbert-base-tas-b |
+
 ## Notes
 
 - **Resume:** Progress is saved to `output/{OPENSEARCH_INDEX}_pipeline_progress.json` (one file per index). It stores the last stream file and position, so on restart the pipeline continues from that file instead of re-reading from the beginning. Delete the progress file to start from scratch.
 - **Full dump:** Leave `MAX_PAGES` unset to process the entire dump. Expect long runtimes (days) depending on size and API limits.
-- **Embedding models:**
-  - **Azure** (default): 1536-dim, 8192 token limit. Set `EMBEDDING_PROVIDER=azure`.
+- **Embedding providers:**
+  - **OpenSearch ML** (recommended): Uses deployed model (e.g. `msmarco-distilbert-base-tas-b`). Set `EMBEDDING_PROVIDER=opensearch` and `OPENSEARCH_ML_MODEL_ID`.
+  - **Azure**: 1536-dim, 8192 token limit. Set `EMBEDDING_PROVIDER=azure`.
   - **Gemma**: 768-dim (or 512/256/128 via MRL truncation), ~2048 token limit. Set `EMBEDDING_PROVIDER=gemma`. Requires `uv sync --extra gemma` for sentence-transformers.
   - When switching models, recreate the index (`01_create_index.py`) with matching `EMBEDDING_DIMENSION`.
-- **Chunk size:** For Gemma's shorter context, reduce `chunk_size` in `config/pipeline.json` (e.g. 200–300 tokens instead of 1000).
+- **Chunk size:** Default is 2000 chars (~512 tokens) for `msmarco-distilbert-base-tas-b`. Adjust in `config/pipeline.json`.
 - **Chunking test:** Run `uv run python scripts/test_chunking.py` to verify section parsing, chunk splitting, and nested doc output.

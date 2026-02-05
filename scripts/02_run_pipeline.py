@@ -69,10 +69,17 @@ def load_config() -> dict:
     config["opensearch_index"] = os.environ.get("OPENSEARCH_INDEX", config.get("opensearch_index", "wiki_kb_nested"))
     config["opensearch_region"] = os.environ.get("OPENSEARCH_REGION", "ap-south-1")
     # Embedding provider and dimension
-    config["embedding_provider"] = os.environ.get("EMBEDDING_PROVIDER", config.get("embedding_provider", "azure")).lower()
+    config["embedding_provider"] = os.environ.get("EMBEDDING_PROVIDER", config.get("embedding_provider", "opensearch")).lower()
     provider = config["embedding_provider"]
-    default_dims = {"azure": 1536, "gemma": 768}
-    config["embedding_dimension"] = env_int("EMBEDDING_DIMENSION") or config.get("embedding_dimension") or default_dims.get(provider, 1536)
+    default_dims = {"azure": 1536, "gemma": 768, "opensearch": 768}
+    config["embedding_dimension"] = env_int("EMBEDDING_DIMENSION") or config.get("embedding_dimension") or default_dims.get(provider, 768)
+
+    # Max chunks to embed per document (for doc_vector mean pooling)
+    config["max_embedded_chunks"] = env_int("MAX_EMBEDDED_CHUNKS") or config.get("max_embedded_chunks", 3)
+
+    # OpenSearch ML config (deployed model)
+    config["opensearch_ml_model_id"] = os.environ.get("OPENSEARCH_ML_MODEL_ID", config.get("opensearch_ml_model_id", ""))
+    config["opensearch_ml_max_chars"] = env_int("OPENSEARCH_ML_MAX_CHARS") or config.get("opensearch_ml_max_chars", 2000)
 
     # Azure config
     config["azure_endpoint"] = os.environ.get("AZURE_EMBEDDING_ENDPOINT", config.get("azure_endpoint", ""))
@@ -109,10 +116,11 @@ def main():
     max_pages_val = os.environ.get("MAX_PAGES")
     max_pages = int(max_pages_val) if max_pages_val not in (None, "") else None
 
-    print("Nested pipeline: one doc per article, chunks[] with vectors")
+    print("Nested pipeline: one doc per article, chunks[] with vectors + doc_vector")
     print(f"  Input: {input_file}")
     print(f"  Index: {config['opensearch_index']}")
     print(f"  Embedding: {config['embedding_provider']} ({config['embedding_dimension']}-dim)")
+    print(f"  Embed first {config['max_embedded_chunks']} chunks per doc (mean pooled to doc_vector)")
     print(f"  Max pages: {max_pages or 'all'}")
 
     run_pipeline_nested(

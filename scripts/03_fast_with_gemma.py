@@ -161,6 +161,9 @@ def load_config_fast(args: argparse.Namespace) -> dict:
     if "chunk_size" not in config or config["chunk_size"] > 500:
         config["chunk_size"] = 500  # Gemma-friendly default
     config["gemma_max_chars"] = int(os.environ.get("GEMMA_MAX_CHARS", config.get("gemma_max_chars", 2000)))
+    
+    # FP16 quantization for faster CPU inference
+    config["use_fp16"] = args.fp16 if hasattr(args, 'fp16') and args.fp16 else config.get("use_fp16", False)
 
     # Progress file
     index_name = config.get("opensearch_index", "wiki_kb_nested")
@@ -208,7 +211,8 @@ Examples:
     parser.add_argument("--model", "-m", type=str, help="Embedding model (default: google/embeddinggemma-300m)")
     parser.add_argument("--device", "-d", type=str, choices=["cpu", "cuda", "mps"], help="Device for inference")
     parser.add_argument("--auto-gpu", action="store_true", help="Auto-detect and use GPU if available")
-    parser.add_argument("--dim", type=int, choices=[768, 512, 256, 128], help="Embedding dimension (MRL truncation)")
+    parser.add_argument("--dim", type=int, choices=[1536, 1024, 768, 512, 384, 256, 128], help="Embedding dimension (model-dependent)")
+    parser.add_argument("--fp16", action="store_true", help="Use FP16 (half precision) for ~1.5-2x faster CPU inference")
 
     # Misc
     parser.add_argument("--threads", "-t", type=int, help="CPU threads for PyTorch (default: 75%% of cores)")
@@ -252,6 +256,8 @@ Examples:
     print(f"  Model: {config['gemma_model']}")
     print(f"  Device: {config['gemma_device']}")
     print(f"  Dimension: {config['embedding_dimension']}")
+    if config.get('use_fp16'):
+        print(f"  Quantization: FP16 (faster)")
     embed_procs = config.get('embedding_processes', 1)
     print()
     print(f"CPU parallelization ({thread_info['cpu_count']} cores available):")
@@ -273,13 +279,36 @@ Examples:
     print("=" * 60)
     print()
 
+    # Start persistent embedding pool if using multiple processes
+    # This keeps models loaded across batches - MUCH faster!
+    embed_procs = config.get('embedding_processes', 1)
+    use_persistent_pool = embed_procs > 1
+    
+    if use_persistent_pool:
+        from src.embedding import start_embedding_pool, stop_embedding_pool
+        print()
+        print("Starting persistent embedding pool (models load once, reused across batches)...")
+        start_embedding_pool(
+            model_name=config['gemma_model'],
+            device=config['gemma_device'],
+            num_processes=embed_procs,
+            use_fp16=config.get('use_fp16', False),
+        )
+        print()
+
     start = time.time()
-    stats = run_pipeline_nested(
-        input_file,
-        config=config,
-        max_pages=max_pages,
-        verbose=not args.quiet,
-    )
+    try:
+        stats = run_pipeline_nested(
+            input_file,
+            config=config,
+            max_pages=max_pages,
+            verbose=not args.quiet,
+        )
+    finally:
+        # Always clean up the pool
+        if use_persistent_pool:
+            stop_embedding_pool()
+    
     elapsed = time.time() - start
 
     # Summary

@@ -160,14 +160,23 @@ def clean_text(text: str) -> str:
     return text.strip()
 
 
-def split_into_chunks(text: str, chunk_size: int = 500, overlap: int = 50) -> List[str]:
+def split_into_chunks(text: str, chunk_size: int = 2000, overlap: int = 200) -> List[str]:
     """
-    Split text into overlapping chunks. Uses ~1.5 chars per token.
+    Split text into overlapping chunks.
+    
+    Args:
+        chunk_size: Max characters per chunk (default: 2000 ≈ 512 tokens for distilbert)
+        overlap: Overlap in characters between chunks (default: 200)
+    
+    Recommended chunk_size by model:
+        - msmarco-distilbert-base-tas-b (512 tokens): 2000 chars
+        - embeddinggemma-300m (2048 tokens): 8000 chars
+        - Azure text-embedding-3 (8192 tokens): 30000 chars
     """
     if not text or len(text) < 20:
         return []
-    char_size = int(chunk_size * 1.5)
-    char_overlap = int(overlap * 1.5)
+    char_size = chunk_size  # Now directly in characters
+    char_overlap = overlap
     if len(text) <= char_size:
         return [text]
     chunks = []
@@ -191,4 +200,5 @@ def split_into_chunks(text: str, chunk_size: int = 500, overlap: int = 50) -> Li
             current_len = sum(len(s) for s in current_chunk)
     if current_chunk:
         chunks.append(" ".join(current_chunk))
-    return chunks
+    # Filter out empty or whitespace-only chunks
+    return [c.strip() for c in chunks if c and c.strip()]

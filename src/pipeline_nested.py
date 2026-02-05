@@ -1,11 +1,17 @@
 """
 Nested pipeline: one OpenSearch doc per article, chunks[] (nested) with content + vector.
-Stream -> chunk (section/paragraph) -> embed -> push.
+Stream -> chunk (section/paragraph) -> embed first N chunks -> mean pool for doc_vector -> push.
+
+Embedding strategy:
+- Only first N chunks (default 3) get embeddings (configurable via max_embedded_chunks)
+- Document-level vector (doc_vector) = mean of embedded chunk vectors
+- Remaining chunks have content for BM25 search but no vector
 """
 import os
 import json
 import hashlib
 import time
+import unicodedata
 from pathlib import Path
 from typing import List, Dict, Optional
 from concurrent.futures import ProcessPoolExecutor
@@ -15,6 +21,24 @@ from .dump_reader import stream_pages_tracked, batch_pages
 from .chunking import parse_sections, clean_text, split_into_chunks
 from .embedding import generate_embeddings
 from .opensearch_client import push_batch_to_opensearch, load_progress, save_progress
+
+
+def compute_mean_vector(vectors: List[List[float]]) -> List[float]:
+    """Compute mean of multiple vectors for document-level embedding."""
+    if not vectors:
+        return []
+    # Filter out empty/None vectors and ensure consistent dimensions
+    valid_vectors = [v for v in vectors if v and len(v) > 0]
+    if not valid_vectors:
+        return []
+    dim = len(valid_vectors[0])
+    mean = [0.0] * dim
+    for vec in valid_vectors:
+        # Handle vectors of different lengths (use min to avoid index errors)
+        for i in range(min(len(vec), dim)):
+            mean[i] += vec[i]
+    n = len(valid_vectors)
+    return [x / n for x in mean]
 
 
 def process_single_page_nested(page: Dict, config: Dict) -> Optional[Dict]:
@@ -44,11 +68,14 @@ def process_single_page_nested(page: Dict, config: Dict) -> Optional[Dict]:
             continue
         text_chunks = split_into_chunks(clean_content, chunk_size, chunk_overlap)
         for idx, chunk_text in enumerate(text_chunks):
+            # Skip empty chunks (defensive check)
+            if not chunk_text or not chunk_text.strip():
+                continue
             chunks_out.append({
                 "chunk_index": idx,
                 "section_path": section_path,
-                "content": chunk_text,
-                "char_count": len(chunk_text),
+                "content": chunk_text.strip(),
+                "char_count": len(chunk_text.strip()),
             })
 
     if not chunks_out:
@@ -87,7 +114,14 @@ def build_bulk_docs_nested(
     index_name: str,
     max_doc_id_bytes: int = 512,
 ) -> List[Dict]:
-    """Build list of { _index, _id, _source } for bulk index. Chunks must already have 'vector' set."""
+    """
+    Build list of { _index, _id, _source } for bulk index.
+    
+    Each doc should have:
+    - chunks[]: with 'vector' set for first N chunks (has_vector=True), None for rest
+    - doc_vector: mean of embedded chunk vectors
+    - embedded_chunks: count of chunks with vectors
+    """
     documents = []
     for doc in nested_docs:
         doc_id = _ensure_doc_id_length(doc["article_id"], max_doc_id_bytes)
@@ -97,6 +131,8 @@ def build_bulk_docs_nested(
             "article_hash": doc["article_hash"],
             "timestamp": doc["timestamp"],
             "total_chunks": doc["total_chunks"],
+            "embedded_chunks": doc.get("embedded_chunks", 0),
+            "doc_vector": doc.get("doc_vector"),
             "chunks": doc["chunks"],
         }
         documents.append({
@@ -180,16 +216,60 @@ def run_pipeline_nested(
             stats["total_pages"] += len(pages_batch)
             continue
 
-        all_contents = [c["content"] for doc in nested_docs for c in doc["chunks"]]
-        num_chunks = len(all_contents)
+        # Only embed first N chunks per document (default 3)
+        max_embedded_chunks = config.get("max_embedded_chunks", 3)
+        
+        # Collect texts to embed: first N non-empty chunks from each document
+        texts_to_embed = []
+        embed_map = []  # List of (doc_idx, chunk_idx) to map embeddings back
+        for doc_idx, doc in enumerate(nested_docs):
+            embedded_count = 0
+            for chunk_idx, chunk in enumerate(doc["chunks"]):
+                if embedded_count >= max_embedded_chunks:
+                    break
+                content = chunk.get("content", "")
+                # Robust empty check: strip all whitespace including Unicode
+                normalized = "".join(c for c in content if not unicodedata.category(c).startswith('Z') and c not in '\t\n\r\x0b\x0c')
+                if not normalized.strip():  # Skip empty/whitespace-only chunks
+                    continue
+                texts_to_embed.append(content.strip())
+                embed_map.append((doc_idx, chunk_idx))
+                embedded_count += 1
+        
+        num_to_embed = len(texts_to_embed)
+        total_chunks = sum(len(doc["chunks"]) for doc in nested_docs)
         if verbose:
-            print(f"  Batch {batch_num + 1}: embedding {num_chunks} chunks...", flush=True)
-        embeddings = generate_embeddings(all_contents, config)
-        idx = 0
+            print(f"  Batch {batch_num + 1}: embedding {num_to_embed}/{total_chunks} chunks (first {max_embedded_chunks} per doc)...", flush=True)
+        
+        # Generate embeddings for selected chunks
+        if texts_to_embed:
+            embeddings = generate_embeddings(texts_to_embed, config)
+        else:
+            embeddings = []
+        
+        # Initialize all chunks with has_vector=False, vector=None
         for doc in nested_docs:
-            for c in doc["chunks"]:
-                c["vector"] = embeddings[idx]
-                idx += 1
+            for chunk in doc["chunks"]:
+                chunk["has_vector"] = False
+                chunk["vector"] = None
+        
+        # Assign embeddings to first N chunks and track for mean pooling
+        doc_vectors = {i: [] for i in range(len(nested_docs))}  # doc_idx -> list of vectors
+        for emb_idx, (doc_idx, chunk_idx) in enumerate(embed_map):
+            vec = embeddings[emb_idx]
+            nested_docs[doc_idx]["chunks"][chunk_idx]["vector"] = vec
+            nested_docs[doc_idx]["chunks"][chunk_idx]["has_vector"] = True
+            doc_vectors[doc_idx].append(vec)
+        
+        # Calculate doc_vector (mean of embedded chunk vectors) for each document
+        for doc_idx, doc in enumerate(nested_docs):
+            vectors = doc_vectors[doc_idx]
+            if vectors:
+                doc["doc_vector"] = compute_mean_vector(vectors)
+                doc["embedded_chunks"] = len(vectors)
+            else:
+                doc["doc_vector"] = None
+                doc["embedded_chunks"] = 0
 
         documents = build_bulk_docs_nested(nested_docs, index_name, max_doc_id_bytes)
         success, failed = push_batch_to_opensearch(documents, config)
